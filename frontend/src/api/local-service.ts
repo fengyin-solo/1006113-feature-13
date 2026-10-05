@@ -1,5 +1,6 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import { cutterStats, loadDomain, listCutterRows } from '@/data/cutter/service'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
@@ -87,6 +88,17 @@ export function downloadEntries(key: string): void {
 export function loadOverview(): OverviewResult {
   const rows = allRows()
   const modules = [...MODULE_BY_KEY.values()].map((meta) => {
+    // 刀具概览只认处置线这一份：待处理 = 待更换 + 更换中，异常量 = 待更换（待办）。
+    if (meta.key === 'cutter') {
+      const stats = cutterStats(loadDomain())
+      const created = listCutterRows().length
+      return {
+        name: meta.name,
+        created,
+        pending: stats.waiting + stats.replacing,
+        abnormal: stats.waiting,
+      }
+    }
     const entries = rows[meta.key] ?? []
     return {
       name: meta.name,

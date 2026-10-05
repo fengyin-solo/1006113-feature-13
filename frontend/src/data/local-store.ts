@@ -8,8 +8,19 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+// 刀具处置线有独立的领域存储（检查/更换/销项一条线），不进这份通用台账，避免两侧各存一份。
+const DOMAIN_OWNED_KEYS = new Set(['cutter'])
+
+function stripDomainKeys<T extends Record<string, unknown>>(source: T): T {
+  const result = { ...source }
+  for (const key of DOMAIN_OWNED_KEYS) {
+    delete (result as Record<string, unknown>)[key]
+  }
+  return result
+}
+
 function readStorage(): Record<string, EntryRow[]> {
-  const fallback = clone(SEED_ROWS)
+  const fallback = stripDomainKeys(clone(SEED_ROWS))
   if (typeof window === 'undefined' || !window.localStorage) {
     return fallback
   }
@@ -19,7 +30,7 @@ function readStorage(): Record<string, EntryRow[]> {
     return fallback
   }
   try {
-    const parsed = JSON.parse(raw) as Record<string, EntryRow[]>
+    const parsed = stripDomainKeys(JSON.parse(raw) as Record<string, EntryRow[]>)
     return { ...fallback, ...parsed }
   } catch {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fallback))
