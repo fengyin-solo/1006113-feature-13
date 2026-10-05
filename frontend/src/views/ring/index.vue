@@ -3,18 +3,28 @@
     <header class="page-head">
       <div>
         <h2>掘进环次管理</h2>
-        <p class="page-desc">维护掘进环，围绕环号、起始里程、掘进速度、总推力做登记、筛选与状态流转。</p>
+        <p class="page-desc">
+          维护掘进环，围绕环号、起始里程、掘进速度、总推力做登记、筛选与状态流转。
+          待换刀具清单与待换刀数由刀具处置线统一回写，本页只读，不另存一份。
+        </p>
       </div>
       <div class="page-actions">
-        <button class="btn primary" type="button" @click="openCreate">登记掘进环</button>
         <button class="btn" type="button" @click="exportRows">导出掘进环次清单</button>
       </div>
     </header>
 
     <div class="stat-row">
-      <article v-for="item in stats" :key="item.label" class="stat-card">
-        <span class="stat-label">{{ item.label }}</span>
-        <strong class="stat-value">{{ item.value }}</strong>
+      <article class="stat-card">
+        <span class="stat-label">掘进环总数</span>
+        <strong class="stat-value">{{ rows.length }}</strong>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">待换刀具合计（与刀具入口一致）</span>
+        <strong class="stat-value">{{ pendingCutterTotal }}</strong>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">有待换刀的环次</span>
+        <strong class="stat-value">{{ writebacks.length }}</strong>
       </article>
     </div>
 
@@ -22,6 +32,7 @@
       <span v-for="item in statusSummary" :key="item.status" class="legend-item">
         {{ item.status }}：{{ item.count }}
       </span>
+      <span class="legend-item ring-source">数字来源：刀具处置线未确认更换记录（唯一口径）</span>
     </p>
 
     <form class="filter-bar" @submit.prevent="reload">
@@ -37,35 +48,31 @@
       <thead>
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
+          <th>待换刀具清单（回写）</th>
+          <th>待换刀具数（回写）</th>
           <th>当前状态</th>
-          <th>可执行动作</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
-          <td>{{ row.status }}</td>
-          <td class="row-actions">
-            <button
-              v-for="action in actions"
-              :key="action"
-              class="link"
-              type="button"
-              @click="runAction(action, row)"
-            >
-              {{ action }}
-            </button>
+          <td>{{ writebackOf(String(row['环号'])).items.join('、') || '—' }}</td>
+          <td>
+            <strong :class="{ pending: writebackOf(String(row['环号'])).count > 0 }">
+              {{ writebackOf(String(row['环号'])).count }}
+            </strong>
           </td>
+          <td>{{ row.status }}</td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无掘进环次数据，可先登记掘进环</td>
+          <td :colspan="columns.length + 3" class="empty-state">暂无掘进环次数据</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条掘进环次记录</span>
-      <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
+      <span>共 {{ total }} 条掘进环次记录 · 待换刀数由刀具磨损页「安排更换/确认销项」回写</span>
+      <span v-if="mismatch" class="error-text">回写数与存储数对不上，请刷新或重置刀具数据</span>
     </footer>
   </section>
 </template>
@@ -77,27 +84,50 @@ import {
   downloadEntries,
   listEntries,
   moduleMeta,
-  runAction as applyAction,
 } from '@/api/local-service'
 import type { EntryRow } from '@/data/types'
+import { ringPendingWritebacks } from '@/data/cutter/service'
 
 const meta = moduleMeta('ring')
+// 回写的两列单独渲染，不放进通用列，避免与清单口径分叉。
 const columns = ["环号", "起始里程", "掘进速度", "总推力", "刀盘扭矩", "出土方量", "掘进班组", "环次状态"]
-const actions = ["开始掘进", "确认完成", "申请纠偏"]
 const statuses = ["待掘进", "掘进中", "已贯通", "已纠偏"]
-const stats = [{"label": "本月掘进环数", "value": 0}, {"label": "平均掘进速度", "value": 0}, {"label": "纠偏环数", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
-const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
+const filterFields = ['环号', '掘进班组']
+
+const writebacks = computed(() => ringPendingWritebacks())
+const writebackMap = computed(() => {
+  const map = new Map<string, { items: string[]; count: number }>()
+  for (const item of writebacks.value) {
+    map.set(item.ringNo, { items: item.items, count: item.count })
+  }
+  return map
+})
+
+const pendingCutterTotal = computed(() =>
+  writebacks.value.reduce((sum, item) => sum + item.count, 0),
+)
+
+const mismatch = computed(() =>
+  rows.value.some((row) => {
+    const wb = writebackOf(String(row['环号']))
+    return Number(row['待换刀具数'] ?? 0) !== wb.count
+  }),
+)
+
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function writebackOf(ringNo: string): { items: string[]; count: number } {
+  return writebackMap.value.get(ringNo) ?? { items: [], count: 0 }
+}
 
 function resetFilters() {
   filters.value = {}
@@ -108,30 +138,16 @@ function exportRows() {
   downloadEntries(meta.key)
 }
 
-function openCreate() {
-  errorMessage.value = '掘进环登记入口尚未接入审批流'
-}
-
-function runAction(action: string, row: EntryRow) {
-  errorMessage.value = ''
-  const result = applyAction(meta.key, Number(row.id), action)
-  if (!result.ok) {
-    errorMessage.value = result.message
-    return
-  }
-  reload()
-}
-
 function reload() {
-  errorMessage.value = ''
-  try {
-    const payload = listEntries(meta.key, filters.value)
-    rows.value = payload.items
-    total.value = payload.total
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '掘进环次列表读取失败'
-  }
+  const payload = listEntries(meta.key, filters.value)
+  rows.value = payload.items
+  total.value = payload.total
 }
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.ring-source { background: #e8f1ff; color: #1f4fb0; }
+strong.pending { color: #b42318; }
+</style>

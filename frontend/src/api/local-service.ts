@@ -1,5 +1,6 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import { overviewCounts } from '@/data/cutter/service'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
@@ -87,12 +88,18 @@ export function downloadEntries(key: string): void {
 export function loadOverview(): OverviewResult {
   const rows = allRows()
   const modules = [...MODULE_BY_KEY.values()].map((meta) => {
-    const entries = rows[meta.key] ?? []
+    const entries = rows[meta.key]
+    if (meta.key === 'cutter') {
+      // 刀具模块已改成处置线：总量/待处理都走领域口径，不读已经摘除的通用刀具表。
+      const counts = overviewCounts()
+      return { name: meta.name, ...counts }
+    }
+    const list = Array.isArray(entries) ? entries : []
     return {
       name: meta.name,
-      created: entries.length,
-      pending: entries.filter((row) => row.pending).length,
-      abnormal: entries.filter((row) => row.abnormal).length,
+      created: list.length,
+      pending: list.filter((row) => row.pending).length,
+      abnormal: list.filter((row) => row.abnormal).length,
     }
   })
   const cards = [
